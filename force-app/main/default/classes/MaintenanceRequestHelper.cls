@@ -1,78 +1,86 @@
 public with sharing class MaintenanceRequestHelper {
-    //Quando for fechada uma manutenção. Adicionar uma nova manutenção com vinculo dos equipamentos e veiculo
-    //tipo deve ser routine
-    //subject colocar qualquer coisa
-    //data reported preencher com a data que foi fechado
-    //date due precisa ser preenchido com o equipament com o vencimento mais proximo
-    //ProductId
     
-    public static void handleAfterUpdateMaintenances(List<Case> newRecords, Map<Id, Case> oldMap){
-        List<Case> casesClosed = new List<Case>();
-        List<Id> idMaintenance = new List<Id>();
-        List<Product2> equipamentList = new List<Product2>();
+    public static void handleAfterUpdateMaintenances(List<Case> newRecords, Map<Id, Case> oldMap) {
+        List<Case> casesToInsert = new List<Case>();
+        List<Id> closedCaseIds = new List<Id>();
+        Map<Id, List<Equipment_Maintenance_Item__c>> equipmentMap = new Map<Id, List<Equipment_Maintenance_Item__c>>();
         Date todayDate = Date.today();
-        List<Case> oldCases = new List<Case>();
-        Decimal minCycle = null;
-        Integer minCycleInt = null;
         
-        for(Case oldcs : oldMap.values()){
-            oldCases.add(oldcs);
-            System.debug('Caso antigo------------------>'+oldCases);
+        
+        for (Case cs : newRecords) {
+            Case oldCase = oldMap.get(cs.Id);
+            if (cs.Status == 'Closed' && oldCase != null && oldCase.Status != 'Closed' && oldCase.Type == 'Repair' || oldCase.Type == 'Routine Maintenance') {
+                closedCaseIds.add(cs.Id);
+            }
+        }
+        
+        if (!closedCaseIds.isEmpty()) {
+            List<Equipment_Maintenance_Item__c> equipmentItems = [
+                SELECT Id, Name, Equipment__c, Equipment__r.Maintenance_Cycle__c, Maintenance_Request__c
+                FROM Equipment_Maintenance_Item__c
+                WHERE Maintenance_Request__c IN :closedCaseIds
+            ];
             
-            if(oldcs.Type == 'Repair' || oldcs.Type == 'Routine Maintenance'){
-                
-                for(Case cs : newRecords){
-                    
-                    if(cs.Status != oldMap.get(cs.Id).status){
-                        System.debug('entrou no primeiro if');
-                        if(cs.Status == 'Closed'){
-                            System.debug('entrou no segundo  if');
-                            casesClosed.add(cs);
-                            idMaintenance.add(cs.Id);
-                            if(casesClosed.size() > 0){
-                                Case newmaintenance = new Case();
-                                System.debug('entrou no terceiro if');
-                                
-                                List<Equipment_Maintenance_Item__c> equipament =
-                                    [select id, Name,Equipment__c, Equipment__r.Maintenance_Cycle__c from Equipment_Maintenance_Item__c 
-                                where Maintenance_Request__c in:idMaintenance];
-                                
-                                System.debug('equipamentos'+ equipament);
-                                for(Equipment_Maintenance_Item__c item : equipament){
-                                    System.debug('veio até aqui ');
-                                    
-                                    newmaintenance.ProductId = item.Equipment__c;
-                                    
-                                    Decimal currencyCycle = item.Equipment__r.Maintenance_Cycle__c;
-                                    
-                                    if(minCycle == null || currencyCycle < minCycle){
-                                        minCycle = currencyCycle;
-                                        minCycleInt = minCycle.intValue();
-                                        System.debug(minCycleInt + 'minCycleInt');
-                                    }
-                                }
-                                
-                                newmaintenance.Type = 'Routine Maintenance';
-                                newmaintenance.Subject = 'Do a new maintenance';
-                                newmaintenance.Date_Reported__c = todayDate;
-                                newmaintenance.Status = 'New';
-                                if(minCycleInt != null){
-                                    newmaintenance.Date_Due__c = todayDate.addDays(minCycleInt);
-                                    
-                                }else{
-                                    newmaintenance.Date_Due__c = todayDate.addDays(10);
-                                }
-                                Case correspondingOldCase = oldMap.get(cs.Id);
-                                if (correspondingOldCase != null) {
-                                    newmaintenance.Vehicle__c = correspondingOldCase.Vehicle__c;
-                                }
-                                insert newmaintenance;
-                                System.debug('Novo Case     ----------------------->'+newmaintenance);
-                            }
-                        }
+            
+            for (Equipment_Maintenance_Item__c item : equipmentItems) {
+                if (item.Equipment__r != null) {
+                    if (!equipmentMap.containsKey(item.Maintenance_Request__c)) {
+                        equipmentMap.put(item.Maintenance_Request__c, new List<Equipment_Maintenance_Item__c>());
                     }
+                    equipmentMap.get(item.Maintenance_Request__c).add(item);
                 }
             }
         }
+        
+        // Criar novos casos de manutenção
+        for (Id closedCaseId : closedCaseIds) {
+            Case oldCase = oldMap.get(closedCaseId);
+            if (oldCase != null) {
+                Decimal minCycle = findMinCycle(equipmentMap.get(closedCaseId));
+                
+                Case newCase = new Case(
+                    Type = 'Routine Maintenance',
+                Subject = 'Scheduled maintenance follow-up',
+                Date_Reported__c = todayDate,
+                Status = 'New',
+                Vehicle__c = oldCase.Vehicle__c,
+                Date_Due__c = (minCycle != null) ? todayDate.addDays(minCycle.intValue()) : todayDate.addDays(10)
+                    );
+                casesToInsert.add(newCase);
+            }
+        }
+        
+        if (!casesToInsert.isEmpty()) {
+            insert casesToInsert;
+        }
+        List<Equipment_Maintenance_Item__c> itemsToInsert = new List<Equipment_Maintenance_Item__c>();
+        for (Integer i = 0; i < casesToInsert.size(); i++) {
+            Case newCase = casesToInsert[i];
+            List<Equipment_Maintenance_Item__c> relatedEquipment = equipmentMap.get(closedCaseIds[i]);
+            
+            if (relatedEquipment != null) { 
+                for (Equipment_Maintenance_Item__c item : relatedEquipment) {
+                    Equipment_Maintenance_Item__c newItem = item.clone(false, true); 
+                    newItem.Maintenance_Request__c = newCase.Id;
+                    itemsToInsert.add(newItem);
+                }
+            }
+        }
+        
+        
+        if (!itemsToInsert.isEmpty()) {
+            insert itemsToInsert;
+        }
     }
-} 
+    private static Decimal findMinCycle(List<Equipment_Maintenance_Item__c> equipmentItems) {
+        Decimal minCycle = null;
+        if (equipmentItems != null) {
+            for (Equipment_Maintenance_Item__c item : equipmentItems) {
+                if (item.Equipment__r.Maintenance_Cycle__c != null && (minCycle == null || item.Equipment__r.Maintenance_Cycle__c < minCycle)) {
+                    minCycle = item.Equipment__r.Maintenance_Cycle__c;
+                }
+            }
+        }
+        return minCycle;
+    }
+}
