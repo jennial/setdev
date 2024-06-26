@@ -42,7 +42,7 @@ public with sharing class MaintenanceRequestHelper {
                                     System.debug('veio até aqui ');
                                     
                                     newmaintenance.ProductId = item.Equipment__c;
-
+                                    
                                     Decimal currencyCycle = item.Equipment__r.Maintenance_Cycle__c;
                                     
                                     if(minCycle == null || currencyCycle < minCycle){
@@ -69,11 +69,10 @@ public with sharing class MaintenanceRequestHelper {
                                 insert newmaintenance;
                                 System.debug('Novo Case     ----------------------->'+newmaintenance);
                             }
-                        }   
+                        }
+                    }
                 }
             }
         }
     }
-    
-    
 }
