@@ -69,8 +69,7 @@ public with sharing class MaintenanceRequestHelper {
                                 insert newmaintenance;
                                 System.debug('Novo Case     ----------------------->'+newmaintenance);
                             }
-                        }
-                    }
+                        }   
                 }
             }
         }
